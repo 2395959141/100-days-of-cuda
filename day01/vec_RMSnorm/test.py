@@ -2,17 +2,22 @@ import torch
 from torch.utils.cpp_extension import load
 import time
 import os
+import matplotlib.pyplot as plt
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
+# current_dir = os.path.dirname(os.path.abspath(__file__))
 
-# 设置CUDA路径
-cuda_home = "/usr/local/cuda-12.6"
-os.environ["CUDA_HOME"] = cuda_home
-os.environ["CUDA_PATH"] = cuda_home
+# # 设置CUDA路径
+# cuda_home = "/usr/local/cuda-12.6"
+# os.environ["CUDA_HOME"] = cuda_home
+# os.environ["CUDA_PATH"] = cuda_home
 
+# sources = [
+#     os.path.join(current_dir, 'binding.cpp'),
+#     os.path.join(current_dir, 'RMSnorm_vec.cu')
+# ]
 sources = [
-    os.path.join(current_dir, 'binding.cpp'),
-    os.path.join(current_dir, 'RMSnorm_vec.cu')
+    'binding.cpp',
+    'RMSnorm_vec.cu'
 ]
 
 try:
@@ -47,11 +52,20 @@ torch.manual_seed(42)
 
 # 测试不同张量大小
 tensor_sizes = [
-    (1024, 1024),   # 1M元素
-    (2048, 2048),   # 4M元素
+    (4096, 512),
+    (4096, 768),
+    (4096, 1024),   # 1M元素
+    (4096, 1536),
+    (4096, 2048),   # 4M元素
     (4096, 4096),   # 16M元素
     #(8192, 8192),   # 64M元素
 ]
+
+# 添加两个列表来存储性能数据
+pytorch_times = []
+custom_times = []
+sizes = []
+
 
 for size in tensor_sizes:
     print("=" * 50)
@@ -114,6 +128,12 @@ for size in tensor_sizes:
     
     print("=" * 50 + "\n")
 
+    # 存储性能数据
+    pytorch_times.append(pytorch_time)
+    custom_times.append(custom_time)
+    sizes.append(size[0] * size[1])  # 存储元素总数
+
+
 # 测试代码
 def test_rms_norm():
     input_tensor = torch.randn(10, 10, device='cuda')
@@ -123,3 +143,25 @@ def test_rms_norm():
 
 if __name__ == "__main__":
     test_rms_norm()
+
+# 在代码末尾添加以下绘图代码
+plt.figure(figsize=(10, 6))
+
+# 绘制 PyTorch 实现的时间曲线
+plt.plot([size[1] for size in tensor_sizes], pytorch_times, 'o-', label='PyTorch RMSNorm', color='blue')
+
+# 绘制自定义 CUDA 实现的时间曲线
+plt.plot([size[1] for size in tensor_sizes], custom_times, 'o-', label='Custom CUDA RMSNorm', color='orange')
+
+# 添加图表元素
+plt.title('PyTorch vs Custom CUDA RMSNorm Performance Comparison')
+plt.xlabel('Hidden Dimension Size')
+plt.ylabel('Execution Time (seconds)')
+plt.grid(True, which="both", ls="-")
+plt.legend()
+
+# 保存图表
+plt.savefig('./rmsnorm_performance_comparison.png')
+
+# 显示图表
+plt.show()
