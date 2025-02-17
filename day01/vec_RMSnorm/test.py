@@ -66,6 +66,9 @@ pytorch_times = []
 custom_times = []
 sizes = []
 
+# 在初始化列表后添加带宽存储列表
+pytorch_bandwidth = []
+custom_bandwidth = []
 
 for size in tensor_sizes:
     print("=" * 50)
@@ -133,6 +136,21 @@ for size in tensor_sizes:
     custom_times.append(custom_time)
     sizes.append(size[0] * size[1])  # 存储元素总数
 
+    # 计算数据量（单位：GB）
+    # 输入数据量 + 输出数据量（假设都是float32）
+    data_size_gb = (input_tensor.numel() * 4 * 2) / 1e9  # 4 bytes per float32, 2表示输入+输出
+    
+    # 计算带宽（GB/s）
+    pytorch_bw = data_size_gb / pytorch_time
+    custom_bw = data_size_gb / custom_time
+    
+    # 存储带宽数据
+    pytorch_bandwidth.append(pytorch_bw)
+    custom_bandwidth.append(custom_bw)
+    
+    # 在输出中添加带宽信息
+    print(f"PyTorch bandwidth: {pytorch_bw:.2f} GB/s")
+    print(f"Custom CUDA bandwidth: {custom_bw:.2f} GB/s")
 
 # 测试代码
 def test_rms_norm():
@@ -145,23 +163,28 @@ if __name__ == "__main__":
     test_rms_norm()
 
 # 在代码末尾添加以下绘图代码
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(12, 6))
 
-# 绘制 PyTorch 实现的时间曲线
+# 时间对比子图
+plt.subplot(1, 2, 1)
 plt.plot([size[1] for size in tensor_sizes], pytorch_times, 'o-', label='PyTorch RMSNorm', color='blue')
-
-# 绘制自定义 CUDA 实现的时间曲线
 plt.plot([size[1] for size in tensor_sizes], custom_times, 'o-', label='Custom CUDA RMSNorm', color='orange')
-
-# 添加图表元素
-plt.title('PyTorch vs Custom CUDA RMSNorm Performance Comparison')
+plt.title('Execution Time Comparison')
 plt.xlabel('Hidden Dimension Size')
-plt.ylabel('Execution Time (seconds)')
-plt.grid(True, which="both", ls="-")
+plt.ylabel('Time (seconds)')
+plt.grid(True)
 plt.legend()
 
-# 保存图表
-plt.savefig('./rmsnorm_performance_comparison.png')
+# 带宽对比子图
+plt.subplot(1, 2, 2)
+plt.plot([size[1] for size in tensor_sizes], pytorch_bandwidth, 'o-', label='PyTorch', color='blue')
+plt.plot([size[1] for size in tensor_sizes], custom_bandwidth, 'o-', label='Custom CUDA', color='orange')
+plt.title('Memory Bandwidth Utilization')
+plt.xlabel('Hidden Dimension Size')
+plt.ylabel('Bandwidth (GB/s)')
+plt.grid(True)
+plt.legend()
 
-# 显示图表
+plt.tight_layout()
+plt.savefig('./rmsnorm_performance_comparison.png')
 plt.show()
