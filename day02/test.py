@@ -3,6 +3,7 @@ from torch.utils.cpp_extension import load
 import time
 import os
 import matplotlib.pyplot as plt
+import torch.nn.functional as F
 
 sources = [
     'binding.cpp',
@@ -14,6 +15,10 @@ FP16_GELU = load(
         name="fp16_gelu_ext",
         sources=sources,
         verbose=True,
+        extra_cuda_cflags=[
+            '-O3',
+            '-use_fast_math',
+        ]
     )
     # if not hasattr(FP16_GELU, 'FP16_GELU'):
     #      raise RuntimeError("FP16_GELU extension loaded but FP16_GELU function not found")
@@ -40,6 +45,11 @@ def pytorch_gelu(x):
     tanh_out = torch.tanh(tanh_input)
     # 5. 组合最终结果（保持运算顺序一致）
     return 0.5 * x * (1 + tanh_out)
+
+def pytorch_gelu_official(x):
+    """使用PyTorch提供的GELU实现（与CUDA实现严格对齐）"""
+    # 直接使用PyTorch的GELU函数
+    return F.gelu(x)
 
 # 在测试前添加确定性设置
 torch.backends.cudnn.deterministic = True
@@ -89,22 +99,40 @@ for size in tensor_sizes:
     assert input_tensor.dim() == 2, "输入必须是2D张量"
     assert input_tensor.is_contiguous(), "输入张量必须是连续的"
 
+    # 添加预热过程
+    print("Warming up...")
+    # PyTorch预热
+    for _ in range(10):  # 预热10次
+        _ = pytorch_gelu_official(input_tensor)
+    
     torch.cuda.synchronize()
-    start = time.time()
-    for _ in range(5):
-        result_pytorch = pytorch_gelu(input_tensor)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(1000):
+        result_pytorch = pytorch_gelu_official(input_tensor)
+    end_event.record()
     torch.cuda.synchronize()
-    pytorch_time = (time.time() - start) / 5
+    pytorch_time = start_event.elapsed_time(end_event) / 1000 / 1000  # 转换为秒
 
-     # 自定义CUDA实现基准测试
+    print("Warming up...")
+      # CUDA实现预热
+    for _ in range(10):  # 预热10次
+        _ = FP16_GELU.FP16_GELU8(input_tensor)
+
     torch.cuda.synchronize()
-    start = time.time()
-    for _ in range(5):
+    print("Warmup completed.")
+     # 自定义CUDA实现基准测试
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
+    for _ in range(1000):
         result_custom = FP16_GELU.FP16_GELU8(input_tensor)
         if result_custom is None:
             raise RuntimeError("CUDA function returned None")
+    end_event.record()
     torch.cuda.synchronize()
-    custom_time = (time.time() - start) / 5
+    custom_time = start_event.elapsed_time(end_event) / 1000 / 1000  # 转换为秒
 
     # 结果对比
     max_diff = torch.max(torch.abs(result_pytorch - result_custom)).item()
