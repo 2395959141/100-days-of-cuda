@@ -21,4 +21,4 @@
 | day2  | **FP16_GELU.cu**: Implemented a vectorized FP16 GELU kernel and benchmarked it against PyTorch's implementation. |
 | day3  | **gemv.cu**: Implemented a vectorized FP32 GEMV kernel and benchmarked it against PyTorch's implementation. **Issue**: Bandwidth measurement problem remains unresolved. |
 | day4  | **per_tensor_quantize.cu**: Implemented per-tensor symmetric and asymmetric INT8 quantization. Results were verified on a CPU. |
-
+| day5  | **fused_bias_mask_scale_and_add_fp16.cu**: Implemented a vectorized FP16 fused bias, mask, scale, and add kernel. |
