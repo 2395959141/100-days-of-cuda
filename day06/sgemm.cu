@@ -85,7 +85,7 @@ __global__ void sgemm_kernel_v2(float* A, float* B, float* C, const int M, const
         __syncthreads();
     }
 
-    C_ptr[x + y * N] = temp;
+    C[x + y * N] = temp;
 }
 
 
@@ -97,43 +97,115 @@ __global__ void sgemm_kernel_v3(float* A, float* B, float* C, const int M, const
     constexpr int STEP = BLOCK_SIZE * STRIDE;
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-    float *A_ptr_start = A + STEP * ty * K;
-    float *B_ptr_start = B + STEP * tx;
+    float *A_ptr_start = A + STEP * blockIdx.y * K;
+    float *B_ptr_start = B + STEP * blockIdx.x;
 
     __shared__ float a_shared[STEP][STEP];
     __shared__ float b_shared[STEP][STEP];
-    float temp[STRIDE][STRIDE] = 0.f;
+    float temp[STRIDE][STRIDE] = {0.f};
 
-    for(int s = 0; s < K; s += STEP)
+    for (int s = 0; s < K; s += STEP)
     {
-        for(int i = 0; i < STRIDE; i++)
+        for (int i = 0; i < STRIDE; i++)
         {
-            for(int j = 0; j < STRIDE; j++)
+            for (int j = 0; j < STRIDE; j++)
             {
-                a_shared[ty + i*BLOCK_SIZE][tx + j*BLOCK_SIZE] = A_ptr_start[(ty + BLOCK_SIZE * i) * K + tx + BLOCK_SIZE * j + s];
-                b_shared[ty + i*BLOCK_SIZE][tx + j*BLOCK_SIZE] = B_ptr_start[(ty + BLOCK_SIZE * i + s) * N + tx + BLOCK_SIZE * j];
+                a_shared[ty + i * BLOCK_SIZE][tx + j * BLOCK_SIZE] = A_ptr_start[(ty + BLOCK_SIZE * i) * K + tx + BLOCK_SIZE * j + s];
+                b_shared[ty + i * BLOCK_SIZE][tx + j * BLOCK_SIZE] = B_ptr_start[(ty + BLOCK_SIZE * i + s) * N + tx + BLOCK_SIZE * j];
             }
         }
         __syncthreads();
-        for(int i = 0; i < STRIDE; i++) 
+        for (int i = 0; i < STRIDE; i++)
         {
-            for(int j = 0; j < STRIDE; j++)
+            for (int j = 0; j < STRIDE; j++)
             {
-                for(int k = 0; k < STEP; k++)
+                for (int k = 0; k < STEP; k++)
                 {
-                    temp[i][j] += a_shared[ty + i*BLOCK_SIZE][k] * b_shared[k][tx + j * BLOCK_SIZE];
+                    temp[i][j] += a_shared[ty + i * BLOCK_SIZE][k] * b_shared[k][tx + j * BLOCK_SIZE];
                 }
             }
         }
         __syncthreads();
     }
 
-    float* C_ptr_start = C + N * ty * STEP + tx * STEP;
-    for(int i = 0; i < STRIDE; i++){
-        for(int j = 0; j < STRIDE; j++)
+    float *C_ptr_start = C + N * blockIdx.y * STEP + blockIdx.x * STEP;
+    for (int i = 0; i < STRIDE; i++)
+    {
+        for (int j = 0; j < STRIDE; j++)
         {
-            C_ptr_start[N * (ty + i*BLOCK_SIZE) + tx + j * BLOCK_SIZE] = temp[i][j];
-        } 
+            C_ptr_start[N * (ty + i * BLOCK_SIZE) + tx + j * BLOCK_SIZE] = temp[i][j];
+        }
+    }
+}
+
+
+
+
+//* 向量化加载
+//* 向量化加载版本
+#define FETCH_FLOAT4(pointer) (reinterpret_cast<float4 *>(&(pointer))[0])
+
+template<int BLOCK_SIZE, int STRIDE>
+__global__ void sgemm_kernel_v4(float* A, float* B, float* C, const int M, const int N, const int K)
+{
+    constexpr int STEP = BLOCK_SIZE * STRIDE;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    float *A_ptr_start = A + STEP * blockIdx.y * K;
+    float *B_ptr_start = B + STEP * blockIdx.x;
+
+    __shared__ float a_shared[STEP][STEP];
+    __shared__ float b_shared[STEP][STEP];
+    float temp[STRIDE][STRIDE] = {0.f};
+
+    // 使用向量化加载优化内存访问
+    for (int s = 0; s < K; s += STEP)
+    {
+        // 向量化加载A矩阵到共享内存
+        for (int i = 0; i < STRIDE; i++)
+        {
+            for (int j = 0; j < STRIDE; j += 4) // 每次加载4个元素
+            {
+                FETCH_FLOAT4(a_shared[ty + i * BLOCK_SIZE][tx * 4 + j * BLOCK_SIZE]) = 
+                    FETCH_FLOAT4(A_ptr_start[(ty + BLOCK_SIZE * i) * K + (tx * 4) + j * BLOCK_SIZE + s]);
+            }
+        }
+
+        // 向量化加载B矩阵到共享内存
+        for (int i = 0; i < STRIDE; i++)
+        {
+            for (int j = 0; j < STRIDE; j += 4) // 每次加载4个元素
+            {
+                FETCH_FLOAT4(b_shared[ty + i * BLOCK_SIZE][tx * 4 + j * BLOCK_SIZE]) = 
+                    FETCH_FLOAT4(B_ptr_start[(ty + BLOCK_SIZE * i + s) * N + (tx * 4) + j * BLOCK_SIZE]);
+            }
+        }
+        
+        __syncthreads();
+
+        // 计算部分保持不变，保持原有计算强度
+        for (int i = 0; i < STRIDE; i++)
+        {
+            for (int j = 0; j < STRIDE; j++)
+            {
+                for (int k = 0; k < STEP; k++)
+                {
+                    temp[i][j] += a_shared[ty + i * BLOCK_SIZE][k] * 
+                                 b_shared[k][tx + j * BLOCK_SIZE];
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    // 结果写回全局内存
+    float *C_ptr_start = C + N * blockIdx.y * STEP + blockIdx.x * STEP;
+    for (int i = 0; i < STRIDE; i++)
+    {
+        for (int j = 0; j < STRIDE; j++)
+        {
+            C_ptr_start[N * (ty + i * BLOCK_SIZE) + tx + j * BLOCK_SIZE] = temp[i][j];
+        }
     }
 }
 
@@ -235,7 +307,7 @@ torch::Tensor sgemm_launcher_v2(
     auto C = torch::empty({M, N}, A.options());
     
     // 设置线程块和网格维度
-    const int BLOCK_SIZE = 16;
+    const int BLOCK_SIZE = 32;
     dim3 block(BLOCK_SIZE, BLOCK_SIZE); // 使用二维线程块
     dim3 grid((M + BLOCK_SIZE - 1) / BLOCK_SIZE, 
               (N + BLOCK_SIZE - 1) / BLOCK_SIZE);
@@ -276,7 +348,7 @@ torch::Tensor sgemm_launcher_v3(
     
     // 设置线程块和网格维度
     const int BLOCK_SIZE = 16;
-    const int STRIDE = 2;
+    const int STRIDE = 4;
     dim3 block(BLOCK_SIZE, BLOCK_SIZE); // 使用二维线程块
     dim3 grid((M + BLOCK_SIZE - 1) / (BLOCK_SIZE * STRIDE), 
               (N + BLOCK_SIZE - 1) / (BLOCK_SIZE * STRIDE));
@@ -299,10 +371,47 @@ torch::Tensor sgemm_launcher_v3(
 }
 
 
+torch::Tensor sgemm_launcher_v4(
+    torch::Tensor A,
+    torch::Tensor B) 
+{
+    CHECK_INPUT(A);
+    CHECK_INPUT(B);
+    
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    auto C = torch::empty({M, N}, A.options());
+    
+    // 调整block大小适应向量化加载
+    const int BLOCK_SIZE = 16;
+    const int STRIDE = 4;
+    dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 grid((M + BLOCK_SIZE*STRIDE - 1) / (BLOCK_SIZE*STRIDE), 
+              (N + BLOCK_SIZE*STRIDE - 1) / (BLOCK_SIZE*STRIDE));
+    
+    sgemm_kernel_v4<BLOCK_SIZE, STRIDE><<<grid, block>>>(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        M, N, K
+    );
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        TORCH_CHECK(false, "Kernel launch failed: ", cudaGetErrorString(err));
+    }
+    
+    return C;
+} 
+
+
 // 绑定到Python
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sgemm_fp32_v0", &sgemm_launcher_v0, "FP32 SGEMM (Version 0)");
     m.def("sgemm_fp32_v1", &sgemm_launcher_v1, "FP32 SGEMM (Version 1)");
     m.def("sgemm_fp32_v2", &sgemm_launcher_v2, "FP32 SGEMM (Version 2)");
     m.def("sgemm_fp32_v3", &sgemm_launcher_v3, "FP32 SGEMM (Version 3)");
+    m.def("sgemm_fp32_v4", &sgemm_launcher_v4, "FP32 SGEMM (Version 4)");
 }
