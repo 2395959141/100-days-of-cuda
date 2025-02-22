@@ -6,7 +6,7 @@ import os
 os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"  # 根据你的GPU架构设置
 
 sgemm = load(name="sgemm",
-            sources=["sgemm_fp33_part2.cu"],
+            sources=["sgemm_fp32_part2.cu"],
             )
 
 SUPPORTED_VERSIONS = ['v5', 'v6', 'v7']
