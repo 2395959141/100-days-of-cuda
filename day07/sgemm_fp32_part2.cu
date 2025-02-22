@@ -169,6 +169,73 @@ __global__ void sgemm_kernel_fp32_v7(float* A, float* B, float* C, const int M, 
 }
 
 
+
+
+#define FETCH_FLOAT4(pointer) (reinterpret_cast<float4 *>(&(pointer))[0])
+//! 在V6的基础上，使用寄存器索引，实现对Block中N方向float4读取
+template<int BM, int BN, int BK, int M_PER_THREAD, int N_PER_THREAD, int K_PER_THREAD>
+__global__ void sgemm_kernel_fp32_v8(float* A, float* B, float* C, const int M, const int N, const int K)
+{
+    const int tx = threadIdx.x;
+    const int ty = threadIdx.y;
+
+    float* A_ptr_start = A + blockIdx.y * BM * K;
+    float* B_ptr_start = B + blockIdx.x * BN;
+
+    __shared__ float a_shared[BM][BK];
+    __shared__ float b_shared[BK][BN];
+
+    float a_reg[M_PER_THREAD] = {0.0f};
+    float b_reg[N_PER_THREAD] = {0.0f};
+    float a_load_reg[K_PER_THREAD] = {0.0f}; //! 矩阵A转置操作使用的register
+    float temp[M_PER_THREAD][N_PER_THREAD] = {0.0f};
+    
+    //* HBM-----> register----> shared memory
+    for (int s = 0; s < K; s += BK)
+    {   
+        for (int i = 0; i < M_PER_THREAD; i++) //* 共享内存中一次读入16个元素，需要循环使用FETCH_FLOAT4
+        {
+            FETCH_FLOAT4(a_load_reg[0]) =
+                 FETCH_FLOAT4(A_ptr_start[K * (ty * M_PER_THREAD + i) + s + tx * K_PER_THREAD]);
+            a_shared[tx * K_PER_THREAD + 0][ty * M_PER_THREAD + i] = a_load_reg[0];
+            a_shared[tx * K_PER_THREAD + 1][ty * M_PER_THREAD + i] = a_load_reg[1];
+            a_shared[tx * K_PER_THREAD + 2][ty * M_PER_THREAD + i] = a_load_reg[2];
+            a_shared[tx * K_PER_THREAD + 3][ty * M_PER_THREAD + i] = a_load_reg[3];
+        }
+        for (int i = 0; i < K_PER_THREAD; i++)
+        {
+            FETCH_FLOAT4(b_shared[ty * K_PER_THREAD + i][tx * N_PER_THREAD]) =
+                 FETCH_FLOAT4(B_ptr_start[N * (s + ty * K_PER_THREAD + i) + tx * N_PER_THREAD]);
+        }
+        __syncthreads();
+
+        // 计算核心
+        for (int k = 0; k < BK; k++) {
+            // 加载A寄存器
+            // for (int i = 0; i < M_PER_THREAD; i++) {
+            //     a_reg[i] = a_shared[ty * M_PER_THREAD + i][k];
+            // }
+            //! A矩阵转置后，shared memory也可以进行向量化读取
+            FETCH_FLOAT4(a_reg[0]) = FETCH_FLOAT4(a_shared[k][ty * N_PER_THREAD]);
+            FETCH_FLOAT4(b_reg[0]) = FETCH_FLOAT4(b_shared[k][tx * N_PER_THREAD]);
+            
+            // 累加计算
+            for (int i = 0; i < M_PER_THREAD; i++) {
+                for (int j = 0; j < N_PER_THREAD; j++) {
+                    temp[i][j] += a_reg[i] * b_reg[j];
+                }
+            }
+        }
+        __syncthreads();
+        }
+        //* 写回
+        float* C_ptr_start = C + N * blockIdx.y * BM + blockIdx.x * BN;
+        for (int i = 0; i < M_PER_THREAD; i++)
+            FETCH_FLOAT4(C_ptr_start[N * (ty * M_PER_THREAD + i) + tx * N_PER_THREAD + 0]) = FETCH_FLOAT4(temp[i][0]);
+}
+
+
+
 // 添加v5版本的封装函数
 torch::Tensor sgemm_launcher_v5(
     torch::Tensor A,
@@ -299,11 +366,55 @@ torch::Tensor sgemm_launcher_v7(
     return C;
 }
 
-
+// 在v7的封装函数之后添加v8的封装函数
+torch::Tensor sgemm_launcher_v8(
+    torch::Tensor A,
+    torch::Tensor B) 
+{
+    CHECK_INPUT(A);
+    CHECK_INPUT(B);
+    
+    // 获取矩阵维度
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    // 创建输出张量
+    auto C = torch::empty({M, N}, A.options());
+    
+    // 设置分块参数和线程块维度
+    const int BM = 64;  // 每个块处理的行数
+    const int BN = 64;  // 每个块处理的列数
+    const int BK = 64;  // K维度分块大小
+    const int M_PER_THREAD = 4;  // 每个线程处理4个元素
+    const int N_PER_THREAD = 4;  // 每个线程处理4个元素
+    const int K_PER_THREAD = 4;  // 每个线程处理4个元素
+    
+    dim3 block(16, 16);  // 线程块维度 (16x16=256 threads)
+    dim3 grid((M + BM - 1) / BM, 
+              (N + BN - 1) / BN);
+    
+    // 启动内核
+    sgemm_kernel_fp32_v8<BM, BN, BK, M_PER_THREAD, N_PER_THREAD, K_PER_THREAD><<<grid, block>>>(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        M, N, K
+    );
+    
+    // 错误检查
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        TORCH_CHECK(false, "Kernel launch failed: ", cudaGetErrorString(err));
+    }
+    
+    return C;
+}
 
 // 更新Python绑定
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sgemm_fp32_v5", &sgemm_launcher_v5, "FP32 SGEMM (Version 5)");
     m.def("sgemm_fp32_v6", &sgemm_launcher_v6, "FP32 SGEMM (Version 6)");
     m.def("sgemm_fp32_v7", &sgemm_launcher_v7, "FP32 SGEMM (Version 7)");
+    m.def("sgemm_fp32_v8", &sgemm_launcher_v8, "FP32 SGEMM (Version 8)");
 }

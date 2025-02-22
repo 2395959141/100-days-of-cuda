@@ -27,7 +27,7 @@ def test_correctness():
         torch_result = torch.mm(A, B)
         
         # 测试所有版本
-        versions = ['v5', 'v6', 'v7']
+        versions = ['v5', 'v6', 'v7', 'v8']
         for ver in versions:
             try:
                 # 添加同步和错误检查
