@@ -1,8 +1,11 @@
 import torch
 from torch.utils.cpp_extension import load
 
+
+import os
+os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"  # 根据你的GPU架构设置
 # 加载自定义CUDA模块
-sgemm = load(name="sgemm", sources=["sgemm.cu"])
+sgemm = load(name="sgemm", sources=["sgemm_fp32_part2.cu"])
 
 def test_correctness():
     # 测试不同尺寸的矩阵（包括非方阵）
@@ -27,7 +30,7 @@ def test_correctness():
         torch_result = torch.mm(A, B)
         
         # 测试所有版本
-        versions = ['v5', 'v6', 'v7', 'v8']
+        versions = ['v5', 'v6', 'v7', 'v8', 'v9']
         for ver in versions:
             try:
                 # 添加同步和错误检查

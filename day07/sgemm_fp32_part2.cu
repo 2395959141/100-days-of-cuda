@@ -8,7 +8,7 @@
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
-//! A矩阵按行访问（连续内存访问）
+//! A矩阵按行访问,连续内存访问
 //! B矩阵按列访问 会导致bank conflict
 #define FETCH_FLOAT4(pointer) (reinterpret_cast<float4 *>(&(pointer))[0])
 //* 分tile不一定非得是方块
@@ -235,6 +235,97 @@ __global__ void sgemm_kernel_fp32_v8(float* A, float* B, float* C, const int M, 
 }
 
 
+template <const int BLOCK_SIZE_M,  // height of block of C that each thread block calculate
+          const int BLOCK_SIZE_N,  // width of block of A that each thread block load into shared memory
+          const int BLOCK_SIZE_K,  // width of block of C that each thread block calculate
+          const int THREAD_SIZE_Y, // height of block of C that each thread calculate
+          const int THREAD_SIZE_X, // width of block of C that each thread calculate
+          const bool ENABLE_DOUBLE_BUFFER>
+__global__ void sgemm_kernel_fp32_v9(float *A_ptr, float *B_ptr, float *C_ptr, const int M, const int N, const int K)
+{
+    // Block index
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+
+    // Thread index
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    // thread id in cur Block
+    const int tid = ty * blockDim.x + tx;
+    __shared__ float a_shared[2][BLOCK_SIZE_K][BLOCK_SIZE_M];
+    __shared__ float b_shared[2][BLOCK_SIZE_K][BLOCK_SIZE_N];
+
+    float accum[THREAD_SIZE_Y][THREAD_SIZE_X] = {0.f};
+    float reg_a[THREAD_SIZE_Y] = {0.f};
+    float reg_b[THREAD_SIZE_X] = {0.f};
+    float ldg_a_reg[4] = {0.f};
+
+    float *A_ptr_start = A_ptr + blockIdx.y * BLOCK_SIZE_M * K;
+    float *B_ptr_start = B_ptr + blockIdx.x * BLOCK_SIZE_N;
+
+    const int A_tile_thread_per_row = BLOCK_SIZE_K / 4; // 2
+    const int B_tile_thread_per_row = BLOCK_SIZE_N / 4; // 32
+
+    const int A_tile_tid_x = tid % A_tile_thread_per_row;
+    const int A_tile_tid_y = tid / A_tile_thread_per_row;
+    const int B_tile_tid_x = tid % B_tile_thread_per_row;
+    const int B_tile_tid_y = tid / B_tile_thread_per_row;
+
+    FETCH_FLOAT4(ldg_a_reg[0]) = FETCH_FLOAT4(A_ptr_start[K * A_tile_tid_y + A_tile_tid_x * 4]);
+    a_shared[0][A_tile_tid_x * 4][A_tile_tid_y] = ldg_a_reg[0];
+    a_shared[0][A_tile_tid_x * 4 + 1][A_tile_tid_y] = ldg_a_reg[1];
+    a_shared[0][A_tile_tid_x * 4 + 2][A_tile_tid_y] = ldg_a_reg[2];
+    a_shared[0][A_tile_tid_x * 4 + 3][A_tile_tid_y] = ldg_a_reg[3];
+    FETCH_FLOAT4(b_shared[0][B_tile_tid_y][B_tile_tid_x * 4]) = FETCH_FLOAT4(B_ptr_start[N * B_tile_tid_y + B_tile_tid_x * 4]);
+    __syncthreads();
+    int write_stage_idx = 1;
+    for (int s = BLOCK_SIZE_K; s < K; s += BLOCK_SIZE_K)
+    {
+        FETCH_FLOAT4(ldg_a_reg[0]) = FETCH_FLOAT4(A_ptr_start[K * A_tile_tid_y + A_tile_tid_x * 4 + s]);
+        a_shared[write_stage_idx][A_tile_tid_x * 4][A_tile_tid_y] = ldg_a_reg[0];
+        a_shared[write_stage_idx][A_tile_tid_x * 4 + 1][A_tile_tid_y] = ldg_a_reg[1];
+        a_shared[write_stage_idx][A_tile_tid_x * 4 + 2][A_tile_tid_y] = ldg_a_reg[2];
+        a_shared[write_stage_idx][A_tile_tid_x * 4 + 3][A_tile_tid_y] = ldg_a_reg[3];
+        FETCH_FLOAT4(b_shared[write_stage_idx][B_tile_tid_y][B_tile_tid_x * 4]) = FETCH_FLOAT4(B_ptr_start[N * (B_tile_tid_y + s) + B_tile_tid_x * 4]);
+        write_stage_idx = write_stage_idx ^ 1;
+        for (int k = 0; k < BLOCK_SIZE_K; k++)
+        {
+            FETCH_FLOAT4(reg_a[0]) = FETCH_FLOAT4(a_shared[write_stage_idx][k][ty * THREAD_SIZE_Y]);
+            FETCH_FLOAT4(reg_a[4]) = FETCH_FLOAT4(a_shared[write_stage_idx][k][ty * THREAD_SIZE_Y + 4]);
+            FETCH_FLOAT4(reg_b[0]) = FETCH_FLOAT4(b_shared[write_stage_idx][k][tx * THREAD_SIZE_X]);
+            FETCH_FLOAT4(reg_b[4]) = FETCH_FLOAT4(b_shared[write_stage_idx][k][tx * THREAD_SIZE_X + 4]);
+
+            for (int i = 0; i < THREAD_SIZE_Y; i++)
+                for (int j = 0; j < THREAD_SIZE_X; j++)
+                    accum[i][j] += reg_a[i] * reg_b[j];
+        }
+        __syncthreads();
+    }
+    write_stage_idx = write_stage_idx ^ 1;
+    for (int k = 0; k < BLOCK_SIZE_K; k++)
+    {
+        FETCH_FLOAT4(reg_a[0]) = FETCH_FLOAT4(a_shared[write_stage_idx][k][ty * THREAD_SIZE_Y]);
+        FETCH_FLOAT4(reg_a[4]) = FETCH_FLOAT4(a_shared[write_stage_idx][k][ty * THREAD_SIZE_Y + 4]);
+        FETCH_FLOAT4(reg_b[0]) = FETCH_FLOAT4(b_shared[write_stage_idx][k][tx * THREAD_SIZE_X]);
+        FETCH_FLOAT4(reg_b[4]) = FETCH_FLOAT4(b_shared[write_stage_idx][k][tx * THREAD_SIZE_X + 4]);
+
+        for (int i = 0; i < THREAD_SIZE_Y; i++)
+            for (int j = 0; j < THREAD_SIZE_X; j++)
+                accum[i][j] += reg_a[i] * reg_b[j];
+    }
+
+    float *C_ptr_start = C_ptr + N * by * BLOCK_SIZE_M +
+                         bx * BLOCK_SIZE_N;
+    for (int i = 0; i < THREAD_SIZE_Y; i++)
+    {
+        FETCH_FLOAT4(C_ptr_start[N * (ty * THREAD_SIZE_Y + i) + tx * THREAD_SIZE_X]) = FETCH_FLOAT4(accum[i][0]);
+        FETCH_FLOAT4(C_ptr_start[N * (ty * THREAD_SIZE_Y + i) + tx * THREAD_SIZE_X + 4]) = FETCH_FLOAT4(accum[i][4]);
+    }
+}
+
+
+
 
 // 添加v5版本的封装函数
 torch::Tensor sgemm_launcher_v5(
@@ -383,9 +474,9 @@ torch::Tensor sgemm_launcher_v8(
     auto C = torch::empty({M, N}, A.options());
     
     // 设置分块参数和线程块维度
-    const int BM = 64;  // 每个块处理的行数
-    const int BN = 64;  // 每个块处理的列数
-    const int BK = 64;  // K维度分块大小
+    const int BM = 64;  //* BM 必须是 block.y * M_PER_THREAD
+    const int BN = 64;  //* BN 必须是 block.x * N_PER_THREAD
+    const int BK = 64;  //* BK 必须是 block.X * K_PER_THREAD
     const int M_PER_THREAD = 4;  // 每个线程处理4个元素
     const int N_PER_THREAD = 4;  // 每个线程处理4个元素
     const int K_PER_THREAD = 4;  // 每个线程处理4个元素
@@ -411,10 +502,56 @@ torch::Tensor sgemm_launcher_v8(
     return C;
 }
 
+
+// 在v7的封装函数之后添加v8的封装函数
+torch::Tensor sgemm_launcher_v9(
+    torch::Tensor A,
+    torch::Tensor B) 
+{
+    CHECK_INPUT(A);
+    CHECK_INPUT(B);
+    
+    // 获取矩阵维度
+    const int M = A.size(0);
+    const int K = A.size(1);
+    const int N = B.size(1);
+    
+    // 创建输出张量
+    auto C = torch::empty({M, N}, A.options());
+    
+    const int BLOCK_SIZE_M = 128;
+    const int BLOCK_SIZE_K = 8;
+    const int BLOCK_SIZE_N = 128;
+    const int THREAD_SIZE_X = 8;
+    const int THREAD_SIZE_Y = 8;
+    const bool ENABLE_DOUBLE_BUFFER = true;
+
+    dim3 block(BLOCK_SIZE_N / THREAD_SIZE_X, BLOCK_SIZE_M / THREAD_SIZE_Y);
+    dim3 grid(N / BLOCK_SIZE_N, M / BLOCK_SIZE_M);
+
+    // 启动内核
+    sgemm_kernel_fp32_v9<BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, THREAD_SIZE_X, THREAD_SIZE_Y, ENABLE_DOUBLE_BUFFER><<<grid, block>>>(
+        A.data_ptr<float>(),
+        B.data_ptr<float>(),
+        C.data_ptr<float>(),
+        M, N, K
+    );
+    
+    // 错误检查
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        TORCH_CHECK(false, "Kernel launch failed: ", cudaGetErrorString(err));
+    }
+    
+    return C;
+}
+
+
 // 更新Python绑定
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("sgemm_fp32_v5", &sgemm_launcher_v5, "FP32 SGEMM (Version 5)");
     m.def("sgemm_fp32_v6", &sgemm_launcher_v6, "FP32 SGEMM (Version 6)");
     m.def("sgemm_fp32_v7", &sgemm_launcher_v7, "FP32 SGEMM (Version 7)");
     m.def("sgemm_fp32_v8", &sgemm_launcher_v8, "FP32 SGEMM (Version 8)");
+    m.def("sgemm_fp32_v9", &sgemm_launcher_v9, "FP32 SGEMM (Version 9)");
 }
