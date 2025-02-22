@@ -2,8 +2,8 @@ import torch
 import time 
 from torch.utils.cpp_extension import CUDAExtension, load
 
-import os
-os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"  # 根据你的GPU架构设置
+# import os
+# os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"  # 根据你的GPU架构设置
 
 sgemm = load(name="sgemm",
             sources=["sgemm.cu"],
@@ -30,7 +30,7 @@ def test_performance():
         b = torch.randn(n, n, device="cuda", dtype=torch.float32)
         #c = torch.zeros(n, n, device="cuda", dtype=torch.float16)
         
-        # 预热CUDA缓存（增加所有需要测试的操作）
+        #*预热CUDA缓存（增加所有需要测试的操作）
         for _ in range(3):
             sgemm.sgemm_fp32_v1(a, b)
             torch.cuda.synchronize()
