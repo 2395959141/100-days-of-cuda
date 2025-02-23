@@ -32,4 +32,8 @@
 |       | 2. v6: Transformed inner product to outer product in shared memory, implemented secondary caching using registers, but without float4 reads |
 |       | 3. v7: Based on v6, implemented float4 reads in N-direction of the block using register indexing |
 |       | 4. v8: Added transpose storage of matrix A to shared memory via register buffering |
-|       | 5. v9: Introduced double buffering technique using two shared memory buffers to hide memory loading latency .|
+|       | 5. v9: Introduced double buffering technique using two shared memory buffers to hide memory loading latency |
+| day8  | **attention_mask.cu**: |
+|       | 1. 实现了基本的attention mask CUDA kernel，支持不同序列长度的mask计算 |
+|       | 2. 考虑了repeat kv（key-value重复）的情况，但尚未进行充分测试 |
+
