@@ -36,4 +36,10 @@
 | day8  | **attention_mask.cu**: |
 |       | 1. 实现了基本的attention mask CUDA kernel，支持不同序列长度的mask计算 |
 |       | 2. 考虑了repeat kv（key-value重复）的情况，但尚未进行充分测试 |
+| day9  | **cublas_gemm.cu**: |
+|       | 1. 实现了使用cublas进行矩阵乘法的基本示例 |
+|       | 2. 特别注意：cublas默认使用列主序存储（column-major），与PyTorch的行主序（row-major）不同 |
+|       | 3. 解决方法：在使用cublas时，可以通过转置输入矩阵来模拟行主序行为 |
+|       | 4. 性能优化：使用cublasLt API进行更灵活的矩阵乘法配置 |
+
 
