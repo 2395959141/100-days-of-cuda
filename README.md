@@ -51,5 +51,10 @@
 |       | 2. 支持高效地将新的key和value向量拼接到现有的KV缓存中 |
 |       | 3. 针对不同序列长度和批量大小进行了性能优化 |
 |       | 4. 通过与PyTorch实现的对比测试验证了正确性 |
+| day12 | **transpose_bank_conflict.cu**: |
+|       | 1. 实现了一个简单的矩阵转置算子，用于学习 shared memory 中的 bank conflict 概念 |
+|       | 2. 在 NVIDIA 4060 laptop 上进行了测试，但未能复现博客中提到的 shared memory 存储过程中的 bank conflict 信息 |
+|       | 3. 可能原因：现代 GPU 架构对 bank conflict 进行了优化，或者测试矩阵规模不够大 |
+
 
 
