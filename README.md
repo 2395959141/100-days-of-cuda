@@ -55,6 +55,9 @@
 |       | 1. 实现了一个简单的矩阵转置算子，用于学习 shared memory 中的 bank conflict 概念 |
 |       | 2. 在 NVIDIA 4060 laptop 上进行了测试，但未能复现博客中提到的 shared memory 存储过程中的 bank conflict 信息 |
 |       | 3. 可能原因：现代 GPU 架构对 bank conflict 进行了优化，或者测试矩阵规模不够大 |
+| day13 | **hgemv.cu**: |
+|       | 1. 实现了半精度（FP16）的矩阵向量乘法（GEMV）算子 |
+|       | 2. 与PyTorch的半精度GEMV实现进行了性能对比和精度验证 |
 
 
 
