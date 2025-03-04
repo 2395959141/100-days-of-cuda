@@ -65,6 +65,16 @@
 | day15 | **swiglu_kernel.cu**: |
 |       | 1. 学习了SwiGLU激活函数的原理和在大型语言模型中的应用 |
 |       | 2. 实现了一个简易的SwiGLU CUDA kernel，支持FP16和FP32数据类型 |
+| day16 | **fused_mha.cu**: |
+|       | 1. 实现了一个融合多头注意力(Fused Multi-Head Attention)算子，将多个操作合并为一个CUDA kernel |
+|       | 2. 集成了多个关键操作：KV缓存拼接(concat KV)、KV重复(repeat KV)、查询-键值矩阵乘法(QK GEMV)、Softmax归一化以及注意力输出计算(QK*V GEMV) |
+|       | 3. 通过融合操作减少了内存访问和kernel启动开销|
+| day17 | **fp8_matmul.cu**: |
+|       | 1. 参考DeepSeek V3开源代码，学习了Triton框架下的FP8量化的矩阵乘法实现 |
+|       | 2. 实现了FP16/FP32到FP8的量化转换函数，包括量化比例因子的计算 |
+
+
+
 
 
 
