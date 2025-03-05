@@ -72,6 +72,11 @@
 | day17 | **fp8_matmul.cu**: |
 |       | 1. 参考DeepSeek V3开源代码，学习了Triton框架下的FP8量化的矩阵乘法实现 |
 |       | 2. 实现了FP16/FP32到FP8的量化转换函数，包括量化比例因子的计算 |
+| day18 | **triton_flash_attention2.py**: |
+|       | 1. 参考Umar Jamil的视频教程，学习了Triton版本的Flash Attention 2前向传播实现 |
+|       | 2. 理解了Flash Attention 2的核心优化：通过分块计算和在线softmax来减少内存访问 |
+|       | 3. 实现了基本的Triton kernel，包括分块矩阵乘法和在线softmax计算 |
+
 
 
 
