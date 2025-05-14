@@ -16,7 +16,7 @@ for ver in SUPPORTED_VERSIONS:
 
 def test_performance():
     sizes = [256, 512, 1024, 2048, 4096, 8192]  # 测试的矩阵尺寸
-    num_runs = 100  # 每个尺寸的运行次数
+    num_runs = 200  # 每个尺寸的运行次数
     
     print(f"{'Size':<10} | {'Custom v5 (TFLOPS)':<18} | {'Custom v6 (TFLOPS)':<18} | {'Custom v7 (TFLOPS)':<18} | {'Custom v8 (TFLOPS)':<18} | {'Custom v9 (TFLOPS)':<18} | {'PyTorch (TFLOPS)':<18}")  # 添加v8列
     print("-" * 118)  # 调整分隔线长度
@@ -27,7 +27,7 @@ def test_performance():
         b = torch.randn(n, n, device="cuda", dtype=torch.float32)
         
         #*预热CUDA缓存（增加所有需要测试的操作）
-        for _ in range(3):
+        for _ in range(10):
             sgemm.sgemm_fp32_v5(a, b)
             sgemm.sgemm_fp32_v6(a, b)
             sgemm.sgemm_fp32_v7(a, b)
